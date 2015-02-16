@@ -12,13 +12,13 @@ import (
 	"github.com/racker/perigee"
 	"github.com/rackspace/gophercloud"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/bootfromvolume"
+	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/floatingip"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/keypairs"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/secgroups"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/extensions/volumeattach"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/flavors"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/images"
 	"github.com/rackspace/gophercloud/openstack/compute/v2/servers"
-	"github.com/rackspace/gophercloud/openstack/networking/v2/extensions/layer3/floatingips"
 	"github.com/rackspace/gophercloud/openstack/networking/v2/networks"
 	"github.com/rackspace/gophercloud/openstack/networking/v2/ports"
 	"github.com/rackspace/gophercloud/pagination"
@@ -275,19 +275,7 @@ func resourceComputeInstanceV2Create(d *schema.ResourceData, meta interface{}) e
 	}
 	floatingIP := d.Get("floating_ip").(string)
 	if floatingIP != "" {
-		networkingClient, err := config.networkingV2Client(d.Get("region").(string))
-		if err != nil {
-			return fmt.Errorf("Error creating OpenStack compute client: %s", err)
-		}
-
-		allFloatingIPs, err := getFloatingIPs(networkingClient)
-		if err != nil {
-			return fmt.Errorf("Error listing OpenStack floating IPs: %s", err)
-		}
-		err = assignFloatingIP(networkingClient, extractFloatingIPFromIP(allFloatingIPs, floatingIP), server.ID)
-		if err != nil {
-			fmt.Errorf("Error assigning floating IP to OpenStack compute instance: %s", err)
-		}
+		_ = floatingip.Associate(computeClient, server.ID, floatingIP)
 	}
 
 	// were volume attachments specified?
@@ -540,19 +528,7 @@ func resourceComputeInstanceV2Update(d *schema.ResourceData, meta interface{}) e
 	if d.HasChange("floating_ip") {
 		floatingIP := d.Get("floating_ip").(string)
 		if floatingIP != "" {
-			networkingClient, err := config.networkingV2Client(d.Get("region").(string))
-			if err != nil {
-				return fmt.Errorf("Error creating OpenStack compute client: %s", err)
-			}
-
-			allFloatingIPs, err := getFloatingIPs(networkingClient)
-			if err != nil {
-				return fmt.Errorf("Error listing OpenStack floating IPs: %s", err)
-			}
-			err = assignFloatingIP(networkingClient, extractFloatingIPFromIP(allFloatingIPs, floatingIP), d.Id())
-			if err != nil {
-				fmt.Errorf("Error assigning floating IP to OpenStack compute instance: %s", err)
-			}
+			_ = floatingip.Associate(computeClient, d.Id(), floatingIP)
 		}
 	}
 
@@ -743,27 +719,6 @@ func resourceInstanceBlockDeviceV2(d *schema.ResourceData, bd map[string]interfa
 	return bfvOpts
 }
 
-func extractFloatingIPFromIP(ips []floatingips.FloatingIP, IP string) *floatingips.FloatingIP {
-	for _, floatingIP := range ips {
-		if floatingIP.FloatingIP == IP {
-			return &floatingIP
-		}
-	}
-	return nil
-}
-
-func assignFloatingIP(networkingClient *gophercloud.ServiceClient, floatingIP *floatingips.FloatingIP, instanceID string) error {
-	networkID, err := getFirstNetworkID(networkingClient, instanceID)
-	if err != nil {
-		return err
-	}
-	portID, err := getInstancePortID(networkingClient, instanceID, networkID)
-	_, err = floatingips.Update(networkingClient, floatingIP.ID, floatingips.UpdateOpts{
-		PortID: portID,
-	}).Extract()
-	return err
-}
-
 func getFirstNetworkID(networkingClient *gophercloud.ServiceClient, instanceID string) (string, error) {
 	pager := networks.List(networkingClient, networks.ListOpts{})
 
@@ -810,27 +765,6 @@ func getInstancePortID(networkingClient *gophercloud.ServiceClient, instanceID, 
 		return "", err
 	}
 	return portID, nil
-}
-
-func getFloatingIPs(networkingClient *gophercloud.ServiceClient) ([]floatingips.FloatingIP, error) {
-	pager := floatingips.List(networkingClient, floatingips.ListOpts{})
-
-	ips := []floatingips.FloatingIP{}
-	err := pager.EachPage(func(page pagination.Page) (bool, error) {
-		floatingipList, err := floatingips.ExtractFloatingIPs(page)
-		if err != nil {
-			return false, err
-		}
-		for _, f := range floatingipList {
-			ips = append(ips, f)
-		}
-		return true, nil
-	})
-
-	if err != nil {
-		return nil, err
-	}
-	return ips, nil
 }
 
 func getImageID(client *gophercloud.ServiceClient, d *schema.ResourceData) (string, error) {
